@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # Frontend Development Server
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-builder
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./src:/app/frontend/src
+      - ./package.json:/app/frontend/package.json
+      - ./vite.config.ts:/app/frontend/vite.config.ts
+      - ./tailwind.config.js:/app/frontend/tailwind.config.js
+    command: npm run dev
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    networks:
+      - winmix-network
+
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+      - winmix-data:/app/backend/data
+    environment:
+      - APP_ENV=development
+      - APP_DEBUG=true
+      - DB_DRIVER=pdo_sqlite
+      - DB_PATH=data/winmix.db
+      - REDIS_HOST=redis
+      - LOG_LEVEL=debug
+    depends_on:
+      - redis
+    command: php -S 0.0.0.0:8000 -t public
+    networks:
+      - winmix-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - winmix-network
+
+  # Production build
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "80:80"
+    volumes:
+      - winmix-data:/var/www/html/api/data
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+    depends_on:
+      - redis
+    networks:
+      - winmix-network
+    profiles:
+      - production
+
+  # Database backup service
+  backup:
+    image: alpine:latest
+    volumes:
+      - winmix-data:/data
+      - ./backups:/backups
+    command: |
+      sh -c "
+        apk add --no-cache sqlite
+        while true; do
+          sqlite3 /data/winmix.db '.backup /backups/winmix_backup_$(date +%Y%m%d_%H%M%S).db'
+          echo 'Backup completed: $(date)'
+          sleep 86400
+        done
+      "
+    networks:
+      - winmix-network
+    profiles:
+      - backup
+
+volumes:
+  winmix-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  winmix-network:
+    driver: bridge
